@@ -35,6 +35,7 @@ const io = new SocketIOServer(server, {
 });
 
 const rooms = new Map();
+const userWeathers = new Map(); // socketId -> weather info
 
 io.on("connection", (socket) => {
   console.log(`[Socket] User connected: ${socket.id}`);
@@ -72,6 +73,14 @@ io.on("connection", (socket) => {
     socket.emit("room-users", { users: existing, count: existing.length });
 
     rooms.get(roomId).add(socket.id);
+
+    // Send existing users' cached weather to the new joiner
+    existing.forEach((peerId) => {
+      const peerWeather = userWeathers.get(peerId);
+      if (peerWeather) {
+        socket.emit("weather", { userId: peerId, weather: peerWeather });
+      }
+    });
 
     // Notify existing users about new joiner (excludes joiner via socket.to)
     socket.to(roomId).emit("user-joined", {
@@ -145,11 +154,25 @@ io.on("connection", (socket) => {
   });
 
   // ====================================
+  // Weather Broadcast
+  // ====================================
+
+  socket.on("weather", (data) => {
+    if (!data || !data.roomId || !data.weather) return;
+    userWeathers.set(socket.id, data.weather);
+    socket.to(data.roomId).emit("weather", {
+      userId: socket.id,
+      weather: data.weather,
+    });
+  });
+
+  // ====================================
   // Disconnect
   // ====================================
 
   socket.on("disconnect", () => {
     console.log(`[Socket] User disconnected: ${socket.id}`);
+    userWeathers.delete(socket.id);
     Array.from(socket.rooms)
       .filter((r) => r !== socket.id)
       .forEach((room) => {

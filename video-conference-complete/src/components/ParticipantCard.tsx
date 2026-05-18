@@ -6,6 +6,7 @@
 
 import React from "react";
 import { VideoContainer } from "./VideoContainer";
+import type { WeatherInfo } from "@/hooks/useLocationWeather";
 
 interface ParticipantCardProps {
   userId: string;
@@ -17,6 +18,7 @@ interface ParticipantCardProps {
   isScreenSharing?: boolean;
   isPresenting?: boolean;
   connectionQuality?: "excellent" | "good" | "poor" | "unknown";
+  weather?: WeatherInfo | null;
 }
 
 export const ParticipantCard: React.FC<ParticipantCardProps> = ({
@@ -29,6 +31,7 @@ export const ParticipantCard: React.FC<ParticipantCardProps> = ({
   isScreenSharing = false,
   isPresenting = false,
   connectionQuality = "unknown",
+  weather,
 }) => {
   const qualityColor = {
     excellent: "bg-green-600",
@@ -56,6 +59,22 @@ export const ParticipantCard: React.FC<ParticipantCardProps> = ({
           label={userName || (isLocal ? "You" : `User ${userId.slice(0, 8)}`)}
         />
       </div>
+
+      {/* Weather Overlay */}
+      {weather && (
+        <div
+          className="absolute top-2 left-2 bg-black/60 backdrop-blur rounded-md px-2 py-1.5 text-white text-xs shadow-lg flex items-center gap-1.5"
+          title={`${weather.description} · ${weather.city}, ${weather.country}`}
+        >
+          <span className="text-base leading-none">{weather.icon}</span>
+          <div className="flex flex-col leading-tight">
+            <span className="font-semibold">{weather.temperature}°C</span>
+            <span className="text-[10px] text-gray-300 truncate max-w-[80px]">
+              {weather.city}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Status Indicators */}
       <div className="absolute top-2 right-2 flex gap-1">

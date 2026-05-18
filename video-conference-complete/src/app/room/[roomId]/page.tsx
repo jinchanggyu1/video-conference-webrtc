@@ -13,6 +13,7 @@ import { useLocalMedia } from "@/hooks/useLocalMedia";
 import { useSocket } from "@/hooks/useSocket";
 import { useWebRTC } from "@/hooks/useWebRTC";
 import { useConferenceStore } from "@/hooks/useConferenceStore";
+import { useLocationWeather, type WeatherInfo } from "@/hooks/useLocationWeather";
 import { logger } from "@/lib/logger";
 
 export default function RoomPage() {
@@ -22,11 +23,15 @@ export default function RoomPage() {
 
   const { localStream, isMuted, isVideoEnabled, toggleMute, toggleVideo } =
     useLocalMedia();
-  const { emit, isConnected } = useSocket();
+  const { emit, on, isConnected } = useSocket();
   const { peers, stats } = useWebRTC({
     roomId: isConnected ? roomId : null,
     localStream,
   });
+  const { weather: myWeather } = useLocationWeather();
+  const [peerWeathers, setPeerWeathers] = useState<Map<string, WeatherInfo>>(
+    new Map()
+  );
 
   const {
     userId,
@@ -43,6 +48,23 @@ export default function RoomPage() {
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const callStartTimeRef = useRef<Date | null>(null);
   const durationIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Broadcast our weather once we have it and are in a room
+  useEffect(() => {
+    if (myWeather && isConnected && roomId) {
+      emit("weather", { roomId, weather: myWeather });
+    }
+  }, [myWeather, isConnected, roomId, emit]);
+
+  // Receive others' weather updates
+  useEffect(() => {
+    if (!isConnected) return undefined;
+    const cleanup = on("weather", (data: { userId: string; weather: WeatherInfo }) => {
+      if (!data?.userId || !data?.weather) return;
+      setPeerWeathers((prev) => new Map(prev).set(data.userId, data.weather));
+    });
+    return cleanup;
+  }, [isConnected, on]);
 
   // Initialize call
   useEffect(() => {
@@ -156,6 +178,7 @@ export default function RoomPage() {
                 isVideoOff={!isVideoEnabled}
                 isScreenSharing={isScreenSharing}
                 connectionQuality="excellent"
+                weather={myWeather}
               />
 
               {/* Remote Videos */}
@@ -170,6 +193,7 @@ export default function RoomPage() {
                   connectionQuality={
                     stats.get(peer.peerId)?.connectionQuality || "unknown"
                   }
+                  weather={peerWeathers.get(peer.peerId)}
                 />
               ))}
 
