@@ -25,9 +25,8 @@ const server = http.createServer(app);
 
 const io = new SocketIOServer(server, {
   cors: {
-    origin: CORS_ORIGIN,
+    origin: CORS_ORIGIN === "*" ? true : CORS_ORIGIN.split(","),
     methods: ["GET", "POST"],
-    credentials: true,
   },
   transports: ["websocket", "polling"],
   maxHttpBufferSize: 1024 * 100,
