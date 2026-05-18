@@ -9,6 +9,8 @@ import { useParams, useRouter } from "next/navigation";
 import { ControlPanel } from "@/components/ControlPanel";
 import { ParticipantCard } from "@/components/ParticipantCard";
 import { RoomStats } from "@/components/RoomStats";
+import { ChatPanel } from "@/components/ChatPanel";
+import type { Message } from "@/lib/types";
 import { useLocalMedia } from "@/hooks/useLocalMedia";
 import { useSocket } from "@/hooks/useSocket";
 import { useWebRTC } from "@/hooks/useWebRTC";
@@ -23,7 +25,7 @@ export default function RoomPage() {
 
   const { localStream, isMuted, isVideoEnabled, toggleMute, toggleVideo } =
     useLocalMedia();
-  const { emit, on, isConnected } = useSocket();
+  const { socket, emit, on, isConnected } = useSocket();
   const { peers, stats, replaceVideoTrack } = useWebRTC({
     roomId: isConnected ? roomId : null,
     localStream,
@@ -42,6 +44,10 @@ export default function RoomPage() {
     sidebarOpen,
     showStats,
     toggleStats,
+    showChat,
+    toggleChat,
+    messages,
+    addMessage,
   } = useConferenceStore();
 
   const [error, setError] = useState<string | null>(null);
@@ -68,6 +74,36 @@ export default function RoomPage() {
     });
     return cleanup;
   }, [isConnected, on]);
+
+  // Receive chat messages (server uses io.to so we get our own back too)
+  useEffect(() => {
+    if (!isConnected) return undefined;
+    const cleanup = on("chat-message", (data: Message) => {
+      if (!data?.id || !data?.content) return;
+      addMessage({
+        id: data.id,
+        senderId: data.senderId,
+        senderName: data.senderName || data.senderId.slice(0, 8),
+        content: data.content,
+        timestamp: new Date(data.timestamp),
+        type: data.type || "text",
+      });
+    });
+    return cleanup;
+  }, [isConnected, on, addMessage]);
+
+  const handleSendChat = (content: string) => {
+    if (!roomId) return;
+    emit("chat-message", {
+      roomId,
+      message: {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        senderName: `User ${userId.slice(0, 6)}`,
+        content,
+        type: "text",
+      },
+    });
+  };
 
   // Initialize call
   useEffect(() => {
@@ -172,6 +208,18 @@ export default function RoomPage() {
           {/* Header Actions */}
           <div className="flex gap-2">
             <button
+              onClick={toggleChat}
+              className={`px-4 py-2 rounded text-white text-sm transition-all ${
+                showChat ? "bg-blue-600 hover:bg-blue-700" : "bg-gray-700 hover:bg-gray-600"
+              }`}
+              title="채팅 토글"
+            >
+              💬 채팅
+              {messages.length > 0 && (
+                <span className="ml-1 text-xs opacity-75">({messages.length})</span>
+              )}
+            </button>
+            <button
               onClick={toggleStats}
               className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-white text-sm transition-all"
               title="통계 토글"
@@ -272,6 +320,15 @@ export default function RoomPage() {
                   }
                   connectionStats={stats}
                   isScreenSharing={isScreenSharing}
+                />
+              )}
+
+              {/* Chat Panel */}
+              {showChat && (
+                <ChatPanel
+                  messages={messages}
+                  currentUserId={socket?.id ?? ""}
+                  onSend={handleSendChat}
                 />
               )}
 

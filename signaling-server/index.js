@@ -145,7 +145,10 @@ io.on("connection", (socket) => {
 
   socket.on("chat-message", (data) => {
     if (data && data.roomId && data.message) {
-      socket.to(data.roomId).emit("chat-message", {
+      // io.to broadcasts to all in room INCLUDING sender — sender uses this
+      // roundtrip as the canonical "message saved" signal and identifies
+      // own messages by senderId === own socket.id.
+      io.to(data.roomId).emit("chat-message", {
         ...data.message,
         senderId: socket.id,
         timestamp: new Date(),
