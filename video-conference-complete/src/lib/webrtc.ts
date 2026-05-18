@@ -10,11 +10,12 @@ export const createPeerConnection = (): RTCPeerConnection => {
   const peerConnection = new RTCPeerConnection(WEBRTC_CONFIG as RTCConfiguration);
 
   peerConnection.onconnectionstatechange = () => {
-    logger.info(
-      `Peer connection state: ${peerConnection.connectionState}`,
-      undefined,
-      "WebRTC"
-    );
+    const state = peerConnection.connectionState;
+    if (state === "failed") {
+      logger.error(`Peer connection FAILED — likely NAT/TURN issue`, undefined, "WebRTC");
+    } else {
+      logger.info(`Peer connection state: ${state}`, undefined, "WebRTC");
+    }
   };
 
   peerConnection.oniceconnectionstatechange = () => {
@@ -24,6 +25,19 @@ export const createPeerConnection = (): RTCPeerConnection => {
       "WebRTC"
     );
   };
+
+  // Log candidate types so we can see if TURN relay is being used.
+  // candidate.type: "host" (local), "srflx" (STUN), "relay" (TURN), "prflx"
+  peerConnection.addEventListener("icecandidate", (event) => {
+    if (event.candidate) {
+      const c = event.candidate;
+      logger.debug(
+        `ICE candidate gathered: type=${c.type} protocol=${c.protocol} address=${c.address ?? "?"}`,
+        undefined,
+        "WebRTC"
+      );
+    }
+  });
 
   return peerConnection;
 };

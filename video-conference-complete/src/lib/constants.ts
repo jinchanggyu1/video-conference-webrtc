@@ -2,14 +2,41 @@
 // Constants & Configuration
 // ====================================
 
+// TURN credentials can be overridden via env vars for private/paid relays.
+// Defaults: Metered Open Relay Project (public, free, occasional rate limits).
+const TURN_USERNAME = process.env.NEXT_PUBLIC_TURN_USERNAME || "openrelayproject";
+const TURN_CREDENTIAL = process.env.NEXT_PUBLIC_TURN_CREDENTIAL || "openrelayproject";
+
 export const WEBRTC_CONFIG = {
   iceServers: [
+    // STUN — used for direct P2P when NAT permits
     { urls: ["stun:stun.l.google.com:19302"] },
     { urls: ["stun:stun1.l.google.com:19302"] },
     { urls: ["stun:stun2.l.google.com:19302"] },
-    { urls: ["stun:stun3.l.google.com:19302"] },
-    { urls: ["stun:stun4.l.google.com:19302"] },
+    // TURN — relay fallback for symmetric NAT / firewalled networks.
+    // Multiple ports/protocols so at least one path usually works.
+    {
+      urls: "turn:openrelay.metered.ca:80",
+      username: TURN_USERNAME,
+      credential: TURN_CREDENTIAL,
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443",
+      username: TURN_USERNAME,
+      credential: TURN_CREDENTIAL,
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443?transport=tcp",
+      username: TURN_USERNAME,
+      credential: TURN_CREDENTIAL,
+    },
+    {
+      urls: "turns:openrelay.metered.ca:443",
+      username: TURN_USERNAME,
+      credential: TURN_CREDENTIAL,
+    },
   ],
+  iceCandidatePoolSize: 10,
 };
 
 export const VIDEO_CONSTRAINTS = {
