@@ -24,7 +24,7 @@ export default function RoomPage() {
   const { localStream, isMuted, isVideoEnabled, toggleMute, toggleVideo } =
     useLocalMedia();
   const { emit, on, isConnected } = useSocket();
-  const { peers, stats } = useWebRTC({
+  const { peers, stats, replaceVideoTrack } = useWebRTC({
     roomId: isConnected ? roomId : null,
     localStream,
   });
@@ -46,8 +46,11 @@ export default function RoomPage() {
 
   const [error, setError] = useState<string | null>(null);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [displayStream, setDisplayStream] = useState<MediaStream | null>(null);
   const callStartTimeRef = useRef<Date | null>(null);
   const durationIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
+  const cameraTrackRef = useRef<MediaStreamTrack | null>(null);
 
   // Broadcast our weather once we have it and are in a room
   useEffect(() => {
@@ -90,27 +93,56 @@ export default function RoomPage() {
     };
   }, [isConnected, roomId, startCall, setConnected]);
 
+  const stopScreenShare = async () => {
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach((t) => t.stop());
+      screenStreamRef.current = null;
+    }
+    if (cameraTrackRef.current) {
+      await replaceVideoTrack(cameraTrackRef.current);
+      cameraTrackRef.current = null;
+    }
+    setDisplayStream(null);
+    setIsScreenSharing(false);
+    emit("screen-share-stop", { roomId, userId });
+    logger.info("Screen share stopped", undefined, "RoomPage");
+  };
+
   const handleScreenShare = async () => {
+    if (isScreenSharing) {
+      await stopScreenShare();
+      return;
+    }
+
     try {
       const screenStream = await navigator.mediaDevices.getDisplayMedia({
         video: { cursor: "always" } as MediaTrackConstraints,
         audio: false,
       });
+      const screenTrack = screenStream.getVideoTracks()[0];
+      if (!screenTrack) throw new Error("No video track in display stream");
 
+      // Save current camera track so we can restore later
+      cameraTrackRef.current = localStream?.getVideoTracks()[0] ?? null;
+      screenStreamRef.current = screenStream;
+
+      // Swap out the outgoing video on every peer connection
+      await replaceVideoTrack(screenTrack);
+
+      // Update local preview
+      setDisplayStream(screenStream);
       setIsScreenSharing(true);
-      emit("screen-share-start", { userId });
-
-      screenStream.getTracks().forEach((track) => {
-        track.onended = () => {
-          setIsScreenSharing(false);
-          emit("screen-share-stop", { userId });
-          logger.info("Screen share ended", undefined, "RoomPage");
-        };
-      });
-
+      emit("screen-share-start", { roomId, userId });
       logger.info("Screen share started", undefined, "RoomPage");
+
+      // Handle the user clicking the browser's "Stop sharing" UI
+      screenTrack.onended = () => {
+        void stopScreenShare();
+      };
     } catch (err) {
-      if (err instanceof DOMException && err.name !== "NotAllowedError") {
+      if (err instanceof DOMException && err.name === "NotAllowedError") {
+        logger.info("Screen share cancelled by user", undefined, "RoomPage");
+      } else {
         logger.error("Screen share failed", err, "RoomPage");
         setError("화면 공유에 실패했습니다.");
       }
@@ -172,10 +204,10 @@ export default function RoomPage() {
               <ParticipantCard
                 userId={userId}
                 userName="You"
-                stream={localStream}
+                stream={displayStream ?? localStream}
                 isLocal
                 isMuted={isMuted}
-                isVideoOff={!isVideoEnabled}
+                isVideoOff={!isVideoEnabled && !isScreenSharing}
                 isScreenSharing={isScreenSharing}
                 connectionQuality="excellent"
                 weather={myWeather}

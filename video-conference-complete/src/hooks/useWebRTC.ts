@@ -158,6 +158,24 @@ export const useWebRTC = ({ roomId, localStream }: UseWebRTCProps) => {
     };
   }, [roomId, localStream, isConnected, emit, on]);
 
+  // Replace the outgoing video track on all peer connections.
+  // Used for screen sharing — swaps camera track for screen track (or back).
+  const replaceVideoTrack = useCallback(async (newTrack: MediaStreamTrack | null) => {
+    const pcs = Array.from(peerConnectionsRef.current.values());
+    await Promise.all(
+      pcs.map(async (pc) => {
+        const sender = pc.getSenders().find((s) => s.track?.kind === "video");
+        if (sender) {
+          try {
+            await sender.replaceTrack(newTrack);
+          } catch (err) {
+            logger.warn("replaceTrack failed", err, "useWebRTC");
+          }
+        }
+      })
+    );
+  }, []);
+
   // Get connection stats
   const getStats = useCallback(async (peerId: string) => {
     const peerConnection = peerConnectionsRef.current.get(peerId);
@@ -191,6 +209,7 @@ export const useWebRTC = ({ roomId, localStream }: UseWebRTCProps) => {
     peers,
     stats,
     getStats,
+    replaceVideoTrack,
     peerConnectionsRef,
   };
 };
