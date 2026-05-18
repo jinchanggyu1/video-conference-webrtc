@@ -71,6 +71,29 @@ export const useSocket = () => {
     }
   }, []);
 
+  // Promise-based request/response using socket.io ack callbacks.
+  // Server-side handler must accept (data, ack) and call ack(response).
+  const request = useCallback(
+    <T = any>(event: string, data?: any, timeoutMs = 5000): Promise<T> => {
+      return new Promise((resolve, reject) => {
+        const socket = socketRef.current;
+        if (!socket?.connected) {
+          reject(new Error("Socket not connected"));
+          return;
+        }
+        const timer = setTimeout(
+          () => reject(new Error(`Request timeout: ${event}`)),
+          timeoutMs
+        );
+        socket.emit(event, data, (response: T) => {
+          clearTimeout(timer);
+          resolve(response);
+        });
+      });
+    },
+    []
+  );
+
   return {
     socket: socketRef.current,
     isConnected,
@@ -78,6 +101,7 @@ export const useSocket = () => {
     emit,
     on,
     once,
+    request,
     disconnect: disconnectSocket,
   };
 };

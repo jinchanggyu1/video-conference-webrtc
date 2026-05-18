@@ -16,8 +16,9 @@ interface UseWebRTCProps {
 export const useWebRTC = ({ roomId, localStream }: UseWebRTCProps) => {
   const [peers, setPeers] = useState<Peer[]>([]);
   const [stats, setStats] = useState<Map<string, ConnectionStats>>(new Map());
+  const [joinError, setJoinError] = useState<string | null>(null);
   const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
-  const { emit, on, isConnected } = useSocket();
+  const { emit, on, request, isConnected } = useSocket();
 
   // Initialize WebRTC connection
   useEffect(() => {
@@ -148,15 +149,29 @@ export const useWebRTC = ({ roomId, localStream }: UseWebRTCProps) => {
     on("ice-candidate", handleIceCandidate);
     on("user-left", handleUserLeft);
 
-    // Join room
-    emit("join-room", roomId);
+    // Join room with ack — surfaces "room not found" etc to UI
+    setJoinError(null);
+    request<{ success?: boolean; error?: string; code?: string }>(
+      "join-room",
+      roomId
+    )
+      .then((res) => {
+        if (res.error) {
+          logger.error(`join-room failed: ${res.error}`, res, "useWebRTC");
+          setJoinError(res.error);
+        }
+      })
+      .catch((err) => {
+        logger.error("join-room request failed", err, "useWebRTC");
+        setJoinError(err instanceof Error ? err.message : "방 입장 실패");
+      });
 
     // Cleanup
     return () => {
       peerConnectionsRef.current.forEach((pc) => closePeerConnection(pc));
       peerConnectionsRef.current.clear();
     };
-  }, [roomId, localStream, isConnected, emit, on]);
+  }, [roomId, localStream, isConnected, emit, on, request]);
 
   // Replace the outgoing video track on all peer connections.
   // Used for screen sharing — swaps camera track for screen track (or back).
@@ -208,6 +223,7 @@ export const useWebRTC = ({ roomId, localStream }: UseWebRTCProps) => {
   return {
     peers,
     stats,
+    joinError,
     getStats,
     replaceVideoTrack,
     peerConnectionsRef,

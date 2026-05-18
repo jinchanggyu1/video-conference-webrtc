@@ -44,10 +44,22 @@ io.on("connection", (socket) => {
   // Room Management
   // ====================================
 
-  socket.on("join-room", (roomId) => {
+  socket.on("join-room", (roomId, ack) => {
+    const respond = (res) => {
+      if (typeof ack === "function") ack(res);
+    };
+
     if (!roomId || typeof roomId !== "string") {
       socket.emit("error", { message: "Invalid room ID" });
-      return;
+      return respond({ error: "Invalid room ID", code: "INVALID_ID" });
+    }
+
+    // Strict mode: room must already exist (created via create-room).
+    // Prevents accidental ghost rooms from typos or direct URL access.
+    if (!rooms.has(roomId)) {
+      console.log(`[Socket] ${socket.id} tried to join non-existent room: ${roomId}`);
+      socket.emit("error", { message: "Room not found" });
+      return respond({ error: "Room not found", code: "ROOM_NOT_FOUND" });
     }
 
     console.log(`[Socket] ${socket.id} joining room: ${roomId}`);
@@ -66,7 +78,6 @@ io.on("connection", (socket) => {
       });
 
     socket.join(roomId);
-    if (!rooms.has(roomId)) rooms.set(roomId, new Set());
 
     // Send list of existing users to the joiner (before adding themselves)
     const existing = Array.from(rooms.get(roomId));
@@ -91,6 +102,61 @@ io.on("connection", (socket) => {
     console.log(
       `[Socket] Room ${roomId} now has ${rooms.get(roomId).size} users`
     );
+    respond({ success: true, roomId, userCount: rooms.get(roomId).size });
+  });
+
+  // ====================================
+  // Room Lifecycle (Create / Check)
+  // ====================================
+
+  socket.on("create-room", (data, ack) => {
+    const respond = (res) => {
+      if (typeof ack === "function") ack(res);
+    };
+
+    // If client passed a desired roomId, honor it (and reject if taken).
+    // Otherwise generate a fresh one.
+    let roomId = data && typeof data.roomId === "string" ? data.roomId.trim() : null;
+    if (roomId) {
+      if (roomId.length < 3) {
+        return respond({ error: "Room ID too short", code: "INVALID_ID" });
+      }
+      if (rooms.has(roomId)) {
+        return respond({ error: "Room already exists", code: "ROOM_EXISTS" });
+      }
+    } else {
+      do {
+        roomId = Math.random().toString(36).slice(2, 11);
+      } while (rooms.has(roomId));
+    }
+
+    rooms.set(roomId, new Set());
+    console.log(`[Socket] Room created: ${roomId} (by ${socket.id})`);
+
+    // If no one joins this fresh room within 60s, clean it up to prevent leaks.
+    setTimeout(() => {
+      const r = rooms.get(roomId);
+      if (r && r.size === 0) {
+        rooms.delete(roomId);
+        console.log(`[Socket] Empty room ${roomId} cleaned up (timeout)`);
+      }
+    }, 60 * 1000);
+
+    respond({ success: true, roomId });
+  });
+
+  socket.on("check-room", (data, ack) => {
+    const respond = (res) => {
+      if (typeof ack === "function") ack(res);
+    };
+    const roomId =
+      typeof data === "string" ? data : data && typeof data.roomId === "string" ? data.roomId : null;
+    if (!roomId) return respond({ exists: false });
+    const exists = rooms.has(roomId);
+    respond({
+      exists,
+      userCount: exists ? rooms.get(roomId).size : 0,
+    });
   });
 
   socket.on("leave-room", (roomId) => {

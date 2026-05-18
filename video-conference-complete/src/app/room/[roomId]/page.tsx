@@ -26,7 +26,7 @@ export default function RoomPage() {
   const { localStream, isMuted, isVideoEnabled, toggleMute, toggleVideo } =
     useLocalMedia();
   const { socket, emit, on, isConnected } = useSocket();
-  const { peers, stats, replaceVideoTrack } = useWebRTC({
+  const { peers, stats, joinError, replaceVideoTrack } = useWebRTC({
     roomId: isConnected ? roomId : null,
     localStream,
   });
@@ -190,6 +190,33 @@ export default function RoomPage() {
     endCall();
     router.push("/");
   };
+
+  // If server says room doesn't exist, send user back home with a notice
+  useEffect(() => {
+    if (!joinError) return undefined;
+    logger.warn(`Join error: ${joinError}`, undefined, "RoomPage");
+    const t = setTimeout(() => {
+      endCall();
+      router.push("/");
+    }, 2500);
+    return () => clearTimeout(t);
+  }, [joinError, endCall, router]);
+
+  if (joinError) {
+    return (
+      <div className="min-h-screen bg-dark flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-gray-800/70 backdrop-blur border border-red-700/50 rounded-lg p-6 text-center">
+          <div className="text-5xl mb-3">⚠️</div>
+          <h2 className="text-xl font-bold text-white mb-2">방 입장 실패</h2>
+          <p className="text-red-300 mb-4">{joinError}</p>
+          <p className="text-gray-400 text-sm mb-4">
+            방 ID: <span className="font-mono text-gray-200">{roomId}</span>
+          </p>
+          <p className="text-gray-500 text-xs">잠시 후 메인 페이지로 이동합니다…</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-dark p-4">

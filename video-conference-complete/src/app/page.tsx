@@ -9,6 +9,7 @@ import { useRouter } from "next/navigation";
 import { VideoContainer } from "@/components/VideoContainer";
 import { ControlPanel } from "@/components/ControlPanel";
 import { useLocalMedia } from "@/hooks/useLocalMedia";
+import { useSocket } from "@/hooks/useSocket";
 import { useConferenceStore } from "@/hooks/useConferenceStore";
 import { logger } from "@/lib/logger";
 
@@ -16,19 +17,25 @@ export default function HomePage() {
   const router = useRouter();
   const { localStream, isMuted, isVideoEnabled, toggleMute, toggleVideo } =
     useLocalMedia();
+  const { request, isConnected } = useSocket();
   const [roomId, setRoomId] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { userId, setRoomId: storeSetRoomId } = useConferenceStore();
 
   const handleJoinRoom = async () => {
-    if (!roomId.trim()) {
+    const trimmed = roomId.trim();
+    if (!trimmed) {
       setError("방 ID를 입력해주세요.");
       return;
     }
-
-    if (roomId.length < 3) {
+    if (trimmed.length < 3) {
       setError("방 ID는 최소 3자 이상이어야 합니다.");
+      return;
+    }
+    if (!isConnected) {
+      setError("시그널링 서버에 연결 중입니다. 잠시 후 다시 시도해주세요.");
       return;
     }
 
@@ -36,13 +43,22 @@ export default function HomePage() {
     setError(null);
 
     try {
-      logger.info(`Attempting to join room: ${roomId}`, undefined, "HomePage");
-      storeSetRoomId(roomId);
-      router.push(`/room/${roomId}`);
+      logger.info(`Checking room existence: ${trimmed}`, undefined, "HomePage");
+      const res = await request<{ exists: boolean; userCount: number }>(
+        "check-room",
+        { roomId: trimmed }
+      );
+      if (!res.exists) {
+        setError(`'${trimmed}' 방이 존재하지 않습니다. 새 방을 만들거나 다른 ID로 시도해주세요.`);
+        setIsLoading(false);
+        return;
+      }
+      storeSetRoomId(trimmed);
+      router.push(`/room/${trimmed}`);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "방 입장 중 오류가 발생했습니다.";
-      setError(errorMessage);
-      logger.error("Failed to join room", err, "HomePage");
+      const msg = err instanceof Error ? err.message : "방 검증 중 오류가 발생했습니다.";
+      setError(msg);
+      logger.error("Failed to check room", err, "HomePage");
       setIsLoading(false);
     }
   };
@@ -73,10 +89,32 @@ export default function HomePage() {
     logger.info("End call clicked on home page", undefined, "HomePage");
   };
 
-  const generateRandomRoomId = () => {
-    const newRoomId = Math.random().toString(36).substr(2, 9);
-    setRoomId(newRoomId);
-    logger.info(`Generated random room ID: ${newRoomId}`, undefined, "HomePage");
+  const handleCreateRoom = async () => {
+    if (!isConnected) {
+      setError("시그널링 서버에 연결 중입니다. 잠시 후 다시 시도해주세요.");
+      return;
+    }
+    setIsCreating(true);
+    setError(null);
+    try {
+      const res = await request<{ success?: boolean; roomId?: string; error?: string }>(
+        "create-room",
+        {}
+      );
+      if (res.error || !res.roomId) {
+        setError(res.error || "방 생성에 실패했습니다.");
+        setIsCreating(false);
+        return;
+      }
+      logger.info(`Room created: ${res.roomId}`, undefined, "HomePage");
+      storeSetRoomId(res.roomId);
+      router.push(`/room/${res.roomId}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "방 생성 중 오류가 발생했습니다.";
+      setError(msg);
+      logger.error("Failed to create room", err, "HomePage");
+      setIsCreating(false);
+    }
   };
 
   return (
@@ -187,21 +225,30 @@ export default function HomePage() {
               {/* Buttons */}
               <div className="grid grid-cols-2 gap-3">
                 <button
-                  onClick={generateRandomRoomId}
-                  disabled={isLoading}
+                  onClick={handleCreateRoom}
+                  disabled={isCreating || isLoading || !isConnected}
                   className="
                     px-4 py-3 rounded-lg font-semibold
                     bg-gray-700 hover:bg-gray-600
                     disabled:opacity-50 disabled:cursor-not-allowed
                     transition-all duration-200
+                    flex items-center justify-center gap-2
                   "
+                  title="새 방 생성 후 자동 입장"
                 >
-                  🎲 생성하기
+                  {isCreating ? (
+                    <>
+                      <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full"></div>
+                      생성 중...
+                    </>
+                  ) : (
+                    <>🎲 새 방 만들기</>
+                  )}
                 </button>
 
                 <button
                   onClick={handleJoinRoom}
-                  disabled={isLoading || !roomId.trim()}
+                  disabled={isLoading || isCreating || !roomId.trim() || !isConnected}
                   className="
                     px-4 py-3 rounded-lg font-semibold
                     bg-blue-600 hover:bg-blue-700
@@ -209,17 +256,24 @@ export default function HomePage() {
                     transition-all duration-200
                     flex items-center justify-center gap-2
                   "
+                  title="기존 방 입장 (존재 여부 검증)"
                 >
                   {isLoading ? (
                     <>
                       <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full"></div>
-                      입장 중...
+                      확인 중...
                     </>
                   ) : (
                     <>🚪 입장하기</>
                   )}
                 </button>
               </div>
+
+              {!isConnected && (
+                <p className="text-xs text-gray-400 mt-1 text-center">
+                  ⏳ 시그널링 서버 연결 중...
+                </p>
+              )}
             </div>
 
             {/* Info Cards */}
