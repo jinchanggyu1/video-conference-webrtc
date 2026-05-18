@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: video-conference-signaling
+    runtime: node
+    rootDir: signaling-server
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: CORS_ORIGIN
+        value: "*"
+      - key: NODE_VERSION
+        value: 20

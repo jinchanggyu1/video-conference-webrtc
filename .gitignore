@@ -1,0 +1,24 @@
+node_modules/
+.next/
+out/
+.env
+.env.local
+.env.production.local
+.DS_Store
+.idea/
+.vscode/
+*.log
+*.swp
+*.swo
+.claude/
+
+# Instructional guide files (excluded from public repo)
+00_MASTER_GUIDE.md
+01_PROJECT_SETUP_GUIDE.md
+02_TYPES_AND_UTILS_GUIDE.md
+03_HOOKS_IMPLEMENTATION_GUIDE.md
+04_COMPONENTS_IMPLEMENTATION_GUIDE.md
+05_PAGES_IMPLEMENTATION_GUIDE.md
+06_API_SERVER_IMPLEMENTATION_GUIDE.md
+START_HERE.md
+
