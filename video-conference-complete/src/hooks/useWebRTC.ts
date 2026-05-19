@@ -24,96 +24,136 @@ export const useWebRTC = ({ roomId, localStream }: UseWebRTCProps) => {
   useEffect(() => {
     if (!roomId || !localStream || !isConnected) return undefined;
 
-    const createPeerConn = async (peerId: string, isInitiator: boolean = false) => {
+    // Attach common handlers (ontrack/onicecandidate/state) to a new PC.
+    const wireHandlers = (peerConnection: RTCPeerConnection, peerId: string) => {
+      peerConnection.ontrack = (event) => {
+        logger.info(
+          `Received remote track from ${peerId} (kind=${event.track.kind})`,
+          undefined,
+          "useWebRTC"
+        );
+        setPeers((prev) => {
+          const existing = prev.find((p) => p.peerId === peerId);
+          if (existing) {
+            return prev.map((p) =>
+              p.peerId === peerId ? { ...p, stream: event.streams[0] } : p
+            );
+          }
+          return [
+            ...prev,
+            {
+              peerId,
+              connection: peerConnection,
+              stream: event.streams[0],
+              audioEnabled: true,
+              videoEnabled: true,
+              createdAt: new Date(),
+            },
+          ];
+        });
+      };
+
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          emit("ice-candidate", {
+            to: peerId,
+            candidate: event.candidate.toJSON(),
+          });
+        }
+      };
+
+      // Attempt ICE restart if connection goes south.
+      peerConnection.addEventListener("iceconnectionstatechange", () => {
+        if (
+          peerConnection.iceConnectionState === "failed" ||
+          peerConnection.iceConnectionState === "disconnected"
+        ) {
+          logger.warn(
+            `ICE ${peerConnection.iceConnectionState} for ${peerId} — attempting restart`,
+            undefined,
+            "useWebRTC"
+          );
+          try {
+            peerConnection.restartIce();
+          } catch (e) {
+            logger.warn("restartIce failed", e, "useWebRTC");
+          }
+        }
+      });
+    };
+
+    // Add local tracks in deterministic order (audio first, then video) so
+    // both sides' m-lines line up regardless of getTracks() ordering quirks.
+    const addLocalTracks = (peerConnection: RTCPeerConnection) => {
+      const audioTracks = localStream.getAudioTracks();
+      const videoTracks = localStream.getVideoTracks();
+      audioTracks.forEach((t) => peerConnection.addTrack(t, localStream));
+      videoTracks.forEach((t) => peerConnection.addTrack(t, localStream));
+    };
+
+    // Initiator: build PC, add tracks, create offer, send.
+    const createOffererPC = async (peerId: string) => {
       try {
         const peerConnection = createPeerConnection();
-
-        // Add local tracks to peer connection
-        localStream.getTracks().forEach((track) => {
-          peerConnection.addTrack(track, localStream);
-        });
-
-        // Handle remote stream
-        peerConnection.ontrack = (event) => {
-          logger.info(`Received remote track from ${peerId}`, undefined, "useWebRTC");
-
-          setPeers((prev) => {
-            const existing = prev.find((p) => p.peerId === peerId);
-            if (existing) {
-              return prev.map((p) =>
-                p.peerId === peerId ? { ...p, stream: event.streams[0] } : p
-              );
-            } else {
-              return [
-                ...prev,
-                {
-                  peerId,
-                  connection: peerConnection,
-                  stream: event.streams[0],
-                  audioEnabled: true,
-                  videoEnabled: true,
-                  createdAt: new Date(),
-                },
-              ];
-            }
-          });
-        };
-
-        // Handle ICE candidates
-        peerConnection.onicecandidate = (event) => {
-          if (event.candidate) {
-            emit("ice-candidate", {
-              to: peerId,
-              candidate: event.candidate.toJSON(),
-            });
-          }
-        };
-
+        wireHandlers(peerConnection, peerId);
+        addLocalTracks(peerConnection);
         peerConnectionsRef.current.set(peerId, peerConnection);
 
-        // Create and send offer if initiator
-        if (isInitiator) {
-          const offer = await peerConnection.createOffer();
-          await peerConnection.setLocalDescription(offer);
-          emit("offer", { to: peerId, offer });
-        }
-
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        emit("offer", { to: peerId, offer });
         return peerConnection;
       } catch (error) {
-        logger.error(`Failed to create peer connection for ${peerId}`, error, "useWebRTC");
+        logger.error(`Failed to create offerer PC for ${peerId}`, error, "useWebRTC");
         return undefined;
       }
     };
 
-    // Handle user joined
-    const handleUserJoined = async (data: { userId: string }) => {
-      logger.info(`User joined: ${data.userId}`, undefined, "useWebRTC");
-      await createPeerConn(data.userId, true);
-    };
-
-    // Handle offer
+    // Answerer: build PC, setRemoteDescription FIRST (so browser creates
+    // remote transceivers), THEN add local tracks (matched into existing
+    // transceivers), then createAnswer. This is the correct unified-plan
+    // ordering — doing addTrack first can leave senders orphaned and
+    // ontrack never fires.
     const handleOffer = async (data: { from: string; offer: any }) => {
-      const peerConnection =
-        peerConnectionsRef.current.get(data.from) ||
-        (await createPeerConn(data.from, false));
+      try {
+        let peerConnection = peerConnectionsRef.current.get(data.from);
+        if (!peerConnection) {
+          peerConnection = createPeerConnection();
+          wireHandlers(peerConnection, data.from);
+          peerConnectionsRef.current.set(data.from, peerConnection);
+        }
 
-      if (peerConnection) {
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+        await peerConnection.setRemoteDescription(
+          new RTCSessionDescription(data.offer)
+        );
+        addLocalTracks(peerConnection);
+
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
         emit("answer", { to: data.from, answer });
+      } catch (error) {
+        logger.error(`Failed to handle offer from ${data.from}`, error, "useWebRTC");
       }
     };
 
-    // Handle answer
+    const handleUserJoined = async (data: { userId: string }) => {
+      logger.info(`User joined: ${data.userId}`, undefined, "useWebRTC");
+      await createOffererPC(data.userId);
+    };
+
     const handleAnswer = async (data: { from: string; answer: any }) => {
       const peerConnection = peerConnectionsRef.current.get(data.from);
       if (peerConnection) {
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+        try {
+          await peerConnection.setRemoteDescription(
+            new RTCSessionDescription(data.answer)
+          );
+        } catch (e) {
+          logger.error(`setRemoteDescription(answer) failed for ${data.from}`, e, "useWebRTC");
+        }
       }
     };
 
-    // Handle ICE candidate
     const handleIceCandidate = async (data: { from: string; candidate: any }) => {
       const peerConnection = peerConnectionsRef.current.get(data.from);
       if (peerConnection && data.candidate) {
@@ -125,7 +165,6 @@ export const useWebRTC = ({ roomId, localStream }: UseWebRTCProps) => {
       }
     };
 
-    // Handle user left
     const handleUserLeft = (data: { userId: string }) => {
       logger.info(`User left: ${data.userId}`, undefined, "useWebRTC");
       const peerConnection = peerConnectionsRef.current.get(data.userId);
@@ -133,7 +172,6 @@ export const useWebRTC = ({ roomId, localStream }: UseWebRTCProps) => {
         closePeerConnection(peerConnection);
         peerConnectionsRef.current.delete(data.userId);
       }
-
       setPeers((prev) => prev.filter((p) => p.peerId !== data.userId));
       setStats((prev) => {
         const newStats = new Map(prev);
@@ -142,12 +180,16 @@ export const useWebRTC = ({ roomId, localStream }: UseWebRTCProps) => {
       });
     };
 
-    // Register event listeners
-    on("user-joined", handleUserJoined);
-    on("offer", handleOffer);
-    on("answer", handleAnswer);
-    on("ice-candidate", handleIceCandidate);
-    on("user-left", handleUserLeft);
+    // Register listeners and capture cleanups (prevents accumulation on
+    // effect re-runs — without this, every reconnect/dep change layered
+    // another handler on the same singleton socket).
+    const cleanups = [
+      on("user-joined", handleUserJoined),
+      on("offer", handleOffer),
+      on("answer", handleAnswer),
+      on("ice-candidate", handleIceCandidate),
+      on("user-left", handleUserLeft),
+    ];
 
     // Join room with ack — surfaces "room not found" etc to UI
     setJoinError(null);
@@ -166,8 +208,8 @@ export const useWebRTC = ({ roomId, localStream }: UseWebRTCProps) => {
         setJoinError(err instanceof Error ? err.message : "방 입장 실패");
       });
 
-    // Cleanup
     return () => {
+      cleanups.forEach((c) => c?.());
       peerConnectionsRef.current.forEach((pc) => closePeerConnection(pc));
       peerConnectionsRef.current.clear();
     };
